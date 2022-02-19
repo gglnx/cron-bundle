@@ -6,15 +6,19 @@ namespace Shapecode\Bundle\CronBundle\EventListener;
 
 use Doctrine\Common\Annotations\Reader;
 use ReflectionClass;
-use Shapecode\Bundle\CronBundle\Annotation\CronJob;
+use Shapecode\Bundle\CronBundle\Annotation\CronJob as CronJobAnnotation;
+use Shapecode\Bundle\CronBundle\Attribute\CronJob as CronJobAttribute;
 use Shapecode\Bundle\CronBundle\Event\LoadJobsEvent;
 use Shapecode\Bundle\CronBundle\Model\CronJobMetadata;
+use Shapecode\Bundle\CronBundle\Service\AttributeReader;
 use Symfony\Bundle\FrameworkBundle\Console\Application;
+use Symfony\Component\Console\Command\LazyCommand;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpKernel\KernelInterface;
 
 use function assert;
 use function is_string;
+use function array_merge;
 
 final class AnnotationJobLoaderListener implements EventSubscriberInterface
 {
@@ -22,7 +26,8 @@ final class AnnotationJobLoaderListener implements EventSubscriberInterface
 
     public function __construct(
         KernelInterface $kernel,
-        private readonly Reader $reader
+        private readonly Reader $reader,
+        private readonly AttributeReader $attributeReader,
     ) {
         $this->application = new Application($kernel);
     }
@@ -38,14 +43,24 @@ final class AnnotationJobLoaderListener implements EventSubscriberInterface
     public function onLoadJobs(LoadJobsEvent $event): void
     {
         foreach ($this->application->all() as $command) {
+            if ($command instanceof LazyCommand) {
+                $command = $command->getCommand();
+            }
+
             // Check for an @CronJob annotation
             $reflectionClass = new ReflectionClass($command);
 
-            foreach ($this->reader->getClassAnnotations($reflectionClass) as $annotation) {
-                if (! ($annotation instanceof CronJob)) {
-                    continue;
-                }
+            $annotations = array_filter(
+                $this->reader->getClassAnnotations($reflectionClass),
+                fn ($annotation) => $annotation instanceof CronJobAnnotation,
+            );
 
+            $annotations = array_merge(
+                $annotations,
+                $this->attributeReader->getClassAttributes($reflectionClass, CronJobAttribute::class),
+            );
+
+            foreach ($annotations as $annotation) {
                 $arguments    = $annotation->arguments;
                 $maxInstances = $annotation->maxInstances;
                 $schedule     = $annotation->value;
